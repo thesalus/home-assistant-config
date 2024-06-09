@@ -1,26 +1,26 @@
 blueprint:
   name: "Auto-adjust light levels"
   description: >-
-    This gradually adjusts light brightness to bring it within the threshold of illuminance.
+    Gradually adjust a light's brightness to bring it within the threshold of illuminance.
   domain: automation
   input:
     light_target:
       name: Light
-      description: The light to adjust.
+      description: The light entity to adjust.
       selector:
         entity:
           filter:
             domain: light
     trigger_target:
       name: Prerequisites for being on
-      description: The prerequisites for being on
+      description: The prerequisites for being on (i.e., an occupancy sensor)
       selector:
         entity:
           filter:
             domain: binary_sensor
     illuminance_threshold:
       name: Illuminance Threshold
-      description: "Threshold. (Default = 3)"
+      description: "How far the measured illuminance can be from the desired value before the automation executes. (Default = 3)"
       default: 3
       selector:
         number:
@@ -30,8 +30,8 @@ blueprint:
           unit_of_measurement: lx
           step: 1.0
     illuminance_entity:
-      name: Illuminance Sensor
-      description: Sensor for illuminance.
+      name: Illuminance Sensor (Measured)
+      description: Sensor that measures illuminance.
       selector:
         entity:
           filter:
@@ -39,7 +39,7 @@ blueprint:
             device_class: illuminance
     illuminance_target_entity:
       name: Illuminance Value (Target)
-      description: Sensor for illuminance.
+      description: Sensor that tracks the desired illuminance.
       selector:
         entity:
           filter:
@@ -59,7 +59,7 @@ blueprint:
         number:
           mode: box
           min: 0
-          max: 3600
+          max: 300
           unit_of_measurement: seconds
           step: 1.0
     max_step_pct:
