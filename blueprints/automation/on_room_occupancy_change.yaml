@@ -1,0 +1,144 @@
+blueprint:
+  name: "On Room Occupancy Change"
+  description: >-
+    Automation for turning lights on/off in reaction to a change in occupancy.
+    
+    This will flash the lights in warning prior to turning off.
+  domain: automation
+  input:
+    light_target:
+      name: Light
+      description: This light will be turned on when occupancy is on.
+      selector:
+        entity:
+          filter:
+            domain: light
+    is_populated_trigger:
+      name: Occupancy Output
+      description: This boolean output will be on if occupancy is detected.
+      selector:
+        entity:
+          filter:
+            - domain: input_boolean
+            - domain: binary_sensor
+              device_class: occupancy
+    initial_brightness:
+      name: Initial Brightness
+      description: Initial brightness when turning lights on (Default = 255 (max))
+      default: "255"
+      selector:
+        template:
+    on_populate_additional_conditions:
+      name: Additional Conditions (On Populate)
+      description: Additional considerations when turning lights on, e.g., cinema mode (Default = 'on')
+      default: "{{ true }}"
+      selector:
+        template:
+    off_populate_additional_conditions:
+      name: Additional Conditions (Off Populate)
+      description: Additional considerations when turning lights off, e.g., guest mode (Default = 'on')
+      default: "{{ true }}"
+      selector:
+        template:
+    grace_period_in_sec:
+      name: Post-warning flash Grace Period
+      description: "Time after warning flash it will wait for repopulation before turning off. (Default = 7s)"
+      default: 7
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 30
+          unit_of_measurement: seconds
+          step: 1.0
+variables:
+  light_target: !input light_target
+  initial_brightness: !input initial_brightness
+  off_populate_additional_conditions: !input off_populate_additional_conditions
+  on_populate_additional_conditions: !input on_populate_additional_conditions
+  grace_period_in_sec: !input grace_period_in_sec
+trigger:
+  - platform: state
+    entity_id: !input is_populated_trigger
+    from: "off"
+    to: "on"
+    id: populated_on
+  - platform: state
+    entity_id: !input is_populated_trigger
+    from: "on"
+    to: "off"
+    id: populated_off
+action:
+  - choose:
+      - alias: If conditions are met to turn off the lights
+        conditions:
+          - alias: If not populated
+            condition: state
+            entity_id: !input is_populated_trigger
+            state: "off"
+          - alias: If lights are on
+            condition: state
+            entity_id: !input light_target
+            state: "on"
+          - condition: template
+            value_template: '{{ off_populate_additional_conditions }}'
+        sequence:
+          - variables:
+              curr_brightness: "{{ state_attr(light_target, 'brightness') | int(0) }}"
+          - alias: Slightly dim lights in warning.
+            service: light.turn_on
+            target:
+              entity_id: !input light_target
+            data_template:
+              brightness: "{{ [0, curr_brightness - 100]|max }}"
+              flash: short
+          - alias: Put lights roughly back to original brightness
+            service: light.turn_on
+            target:
+              entity_id: !input light_target
+            data_template:
+              brightness: "{{ curr_brightness }}"
+          - wait_for_trigger:
+              - platform: state
+                entity_id: !input is_populated_trigger
+                from: "off"
+                to: "on"
+            timeout:
+              seconds: "{{ grace_period_in_sec }}"
+          - if:
+              - alias: not still populated (accounting for race conditions)
+                condition: and
+                conditions:
+                  - alias: is not currently populated
+                    condition: state
+                    entity_id: !input is_populated_trigger
+                    state: "off"
+                  - alias: is_populated did not change
+                    condition: template
+                    value_template: "{{ not wait.completed }}"
+            then:
+              - alias: Turn off the lights
+                service: light.turn_off
+                target:
+                  entity_id: !input light_target
+                data: {}
+      - alias: If conditions are met to turn on the lights
+        conditions:
+          - alias: If is populated
+            condition: state
+            entity_id: !input is_populated_trigger
+            state: "on"
+          - alias: If lights are off
+            condition: state
+            entity_id: !input light_target
+            state: "off"
+          - condition: template
+            value_template: '{{ on_populate_additional_conditions }}'
+        sequence:
+          - alias: Turn on Lights to Desired Brightness
+            service: light.turn_on
+            target:
+              entity_id: !input light_target
+            data_template:
+              brightness: "{{ initial_brightness }}"
+mode: queued

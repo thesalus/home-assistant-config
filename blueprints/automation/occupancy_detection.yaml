@@ -1,0 +1,230 @@
+blueprint:
+  name: "Room Occupancy Detection"
+  description: >-
+    This automation infers occupancy using motion detection and a timeout timer.
+    Whenever motion is detected, it will pause the timeout and increment it
+    (using a cooldown) until the timeout caps at the max ticks.
+  domain: automation
+  input:
+    motion_sensor:
+      name: Motion Sensor
+      description: This sensor will be used to detect motion to determine initial occupancy.
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
+    presence_sensor:
+      name: Motion Sensor
+      description: This sensor will be used to detect motion to determine presence/sustained occupancy.
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
+    is_populated:
+      name: Occupancy Output
+      description: This boolean output will be on if occupancy is detected.
+      selector:
+        entity:
+          filter:
+            domain: input_boolean
+    timeout_timer:
+      name: Timer for tracking timeout
+      description: "This timer will be used to track the remaining time until occupancy times out."
+      selector:
+        entity:
+          filter:
+            - domain: timer
+    seconds_per_tick:
+      name: Seconds per tick
+      description: Amount of time in a tick (in seconds). Allows for advanced customization (like lower timeout at night) (Default = 30s)
+      default: "{{ 30 }}"
+      selector:
+        template:
+    min_ticks:
+      name: Minimum timeout ticks
+      description: "Starting ticks for the occupancy timeout after motion is last detected. (Default = 3)"
+      default: 3
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 100
+          step: 1.0
+    max_ticks:
+      name: Maximum timeout ticks
+      description: "Multiplier for the occupancy timeout after motion is last detected. (Default = 15)"
+      default: 15
+      selector:
+        number:
+          mode: box
+          min: 1
+          max: 100
+          step: 1.0
+    tick_output:
+      name: Timeout Tick Tracker
+      description: This counter will be used to track the length of the timeout and gradually increase it.
+      selector:
+        entity:
+          filter:
+            domain: input_number
+    increment_cooldown_ticks:
+      name: Cooldown Between Increments (as ticks)
+      description: "Time that must elapse until the tick_output can be incremented."
+      default: 1
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 5
+          step: 1.0
+    recent_depop_ticks:
+      name: Bonus Ticks on Recent Depopulation
+      description: "Bonus to be applied on re-population when the room has recently been depopulated. (Default = 2)"
+      default: 2
+      selector:
+        number:
+          mode: box
+          min: 0
+          step: 1.0
+trigger:
+  - platform: state
+    entity_id:
+      - !input motion_sensor
+    from: "off"
+    id: on_motion
+  - platform: state
+    entity_id:
+      - !input presence_sensor
+    from: "off"
+    id: on_presence
+  - platform: event
+    event_type: timer.finished
+    event_data:
+      entity_id: !input timeout_timer
+    id: on_timeout
+  - platform: event
+    event_type: timer.cancelled
+    event_data:
+      entity_id: !input timeout_timer
+    id: on_cancellation
+condition: null
+variables:
+  timeout_timer: !input timeout_timer
+  tick_output: !input tick_output
+  seconds_per_tick: !input seconds_per_tick
+  min_ticks: !input min_ticks
+  max_ticks: !input max_ticks
+  is_populated: !input is_populated
+  increment_cooldown_ticks: !input increment_cooldown_ticks
+  recent_depop_ticks: !input recent_depop_ticks
+action:
+  - choose:
+      - alias: If timer has timed out
+        conditions:
+          - condition: trigger
+            id: on_timeout
+          - condition: state
+            entity_id: !input motion_sensor
+            state: 'off'
+        sequence:
+          - service: input_boolean.turn_off
+            data: {}
+            target:
+              entity_id: !input is_populated
+      - alias: If timer has been cancelled
+        conditions:
+          - condition: trigger
+            id: on_cancellation
+          - condition: state
+            entity_id: !input motion_sensor
+            state: 'off'
+        sequence:
+          - service: input_boolean.turn_off
+            data: {}
+            target:
+              entity_id: !input is_populated
+          - alias: Reset ticks
+            service: input_number.set_value
+            target:
+              entity_id: !input tick_output
+            data:
+              value: "{{ 1 }}"
+    default:
+      - alias: Turn off the timer (for now).
+        service: timer.pause
+        data: {}
+        target:
+          entity_id: !input timeout_timer
+      - variables:
+          last_populated: >
+            {{ as_timestamp(states[is_populated].last_changed) }}
+          is_newly_populated: "{{ is_state(is_populated, 'off') }}"
+      - service: input_boolean.turn_on
+        data: {}
+        target:
+          entity_id: !input is_populated
+      - if:
+          - condition: or
+            conditions:
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: on_motion
+                  - alias: Simple protection against race conditions.
+                    condition: state
+                    entity_id: !input motion_sensor
+                    state: "on"
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: on_presence
+                  - alias: Simple protection against race conditions.
+                    condition: state
+                    entity_id: !input presence_sensor
+                    state: "on"
+                  - alias: Is already populated
+                    condition: state
+                    entity_id: !input is_populated
+                    state: "on"
+        then:
+          - alias: Wait until there is no activity.
+            wait_for_trigger:
+              - platform: state
+                entity_id:
+                  - !input presence_sensor
+                to: "off"
+      - variables:
+          stored_ticks: >
+            {{ states(tick_output)|int(0) }}
+          new_ticks: >
+            {% set now = as_timestamp(now()) %}
+            {% set time_since_last_populated = now - last_populated %}
+            {% set ticks_since_last_pop = ((time_since_last_populated/seconds_per_tick)|round(0, method='floor')) if is_newly_populated else 0 %}
+            {% set adjusted_ticks = [1, stored_ticks - ticks_since_last_pop]|max %}
+
+            {% set last_increment = as_timestamp(states[tick_output].last_changed) %}
+            {% set time_since_last_increment = now - last_increment %}
+            {% set is_past_cooldown = time_since_last_increment >= increment_cooldown_ticks * seconds_per_tick %}
+
+            {% set should_increment = is_past_cooldown or adjusted_ticks < 2 %}
+            {% set increment = 1 if should_increment else 0 %}
+            {% set recent_depop_bonus = recent_depop_ticks if (is_newly_populated and ticks_since_last_pop < 1) else 0 %}
+            {% set new_ticks = adjusted_ticks + increment + recent_depop_bonus %}
+            {{ ([min_ticks, new_ticks, max_ticks]|sort)[1] }}
+      - alias: Adjust ticks if we've calculated a new value.
+        if:
+          - condition: template
+            value_template: "{{ new_ticks != stored_ticks }}"
+        then:
+          - service: input_number.set_value
+            target:
+              entity_id: !input tick_output
+            data:
+              value: "{{ new_ticks }}"
+      - service: timer.start
+        data:
+          duration:
+            seconds: "{{ seconds_per_tick * new_ticks }}"
+        target:
+          entity_id: !input timeout_timer
+mode: single

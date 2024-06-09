@@ -1,0 +1,254 @@
+blueprint:
+  name: "Auto-adjust light levels"
+  description: >-
+    This gradually adjusts light brightness to bring it within the threshold of illuminance.
+  domain: automation
+  input:
+    light_target:
+      name: Light
+      description: The light to adjust.
+      selector:
+        entity:
+          filter:
+            domain: light
+    trigger_target:
+      name: Prerequisites for being on
+      description: The prerequisites for being on
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
+    illuminance_threshold:
+      name: Illuminance Threshold
+      description: "Threshold. (Default = 3)"
+      default: 3
+      selector:
+        number:
+          mode: box
+          min: 1
+          max: 50
+          unit_of_measurement: lx
+          step: 1.0
+    illuminance_entity:
+      name: Illuminance Sensor
+      description: Sensor for illuminance.
+      selector:
+        entity:
+          filter:
+            domain: sensor
+            device_class: illuminance
+    illuminance_target_entity:
+      name: Illuminance Value (Target)
+      description: Sensor for illuminance.
+      selector:
+        entity:
+          filter:
+            domain: sensor
+            device_class: illuminance
+    additional_conditions:
+      name: Additional Conditions
+      description: Additional considerations when determining whether to run this automation, e.g., cinema mode (Default = 'on')
+      default: "{{ true }}"
+      selector:
+        template:
+    update_frequency:
+      name: Light Adjustment Frequency
+      description: "Seconds between each adjustment. (Default = 15s)"
+      default: 15
+      selector:
+        number:
+          mode: box
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+          step: 1.0
+    max_step_pct:
+      name: Max Step Percentage
+      description: "Max percentage by which to change on each adjustment. (Default = 5)"
+      default: 5
+      selector:
+        number:
+          mode: box
+          min: 1
+          max: 100
+          unit_of_measurement: percentage
+          step: 1.0
+variables:
+  light_target: !input light_target
+  trigger_target: !input trigger_target
+  illuminance_threshold: !input illuminance_threshold
+  illuminance_entity: !input illuminance_entity
+  illuminance_target_entity: !input illuminance_target_entity
+  additional_conditions: !input additional_conditions
+  update_frequency: !input update_frequency
+  max_step_pct: !input max_step_pct
+trigger:
+  - alias: When actual illuminance changes
+    platform: state
+    entity_id: !input illuminance_entity
+  - alias: When desired illuminance changes
+    platform: state
+    entity_id: !input illuminance_target_entity
+  - alias: When the light is turned on
+    platform: state
+    entity_id: !input light_target
+    from: "off"
+    to: "on"
+    id: turned_on
+condition:
+  - condition: or
+    conditions:
+      - condition: state
+        entity_id: !input light_target
+        state: "on"
+      - condition: state
+        entity_id: !input trigger_target
+        state: "on"
+  - condition: or
+    conditions:
+      - alias: If the lights are on and it's outside of the threshold
+        condition: and
+        conditions:
+          - condition: state
+            entity_id: !input light_target
+            state: "on"
+          - alias: If it is not close enough to desired brightness
+            condition: template
+            value_template: >
+              {{ (states(illuminance_target_entity)|int(0) - states(illuminance_entity)|int(0))|abs > illuminance_threshold }}
+      - alias: If the lights are off and it's darker than it should be (allowing for the threshold)
+        condition: and
+        conditions:
+          - condition: state
+            entity_id: !input light_target
+            state: "off"
+          - condition: template
+            value_template: >
+              {{ (states(illuminance_target_entity)|int(0) - states(illuminance_entity)|int(0)) > illuminance_threshold }}
+  - alias: If the disable entity is off
+    condition: template
+    value_template: '{{ additional_conditions }}'
+action:
+  - alias: >-
+      Wait or we get timing issues (this needs to be deterministic)... Seems
+      that brightness_step_pct can use stale values.
+    delay: 3
+  - if:
+      - condition: state
+        entity_id: !input light_target
+        state: "off"
+      - condition: state
+        entity_id: !input trigger_target
+        state: "on"
+        for:
+          seconds: 3
+    then:
+      - alias: Turn on Lights on Low (above the auto-disable threshold)
+        service: light.turn_on
+        target:
+          entity_id: !input light_target
+        data_template:
+          brightness: "{{ 10 }}"
+  - alias: Repeat the sequence UNTIL the conditions are true
+    repeat:
+      sequence:
+        - choose:
+            - conditions:
+                - condition: numeric_state
+                  entity_id: !input light_target
+                  attribute: brightness
+                  below: 1
+              sequence:
+                - alias: Turn off Lights
+                  service: light.turn_off
+                  target:
+                    entity_id: !input light_target
+                  data: {}
+          choose:
+            - conditions:
+                - alias: >-
+                    If it is too bright outside or if the room is somehow no
+                    longer populated (this doesn't work), turn off the lights.
+                  condition: state
+                  entity_id: !input trigger_target
+                  state: "off"
+              sequence:
+                - wait_for_trigger:
+                    - platform: state
+                      entity_id:
+                        - !input light_target
+                      from: "off"
+                      to: "on"
+                  timeout:
+                    seconds: "{{ 2 * update_frequency }}"
+                - if:
+                    - alias: If the light was not switched back on.
+                      condition: template
+                      value_template: "{{ not wait.completed }}"
+                  then:
+                    - alias: Turn off Lights
+                      service: light.turn_off
+                      target:
+                        entity_id: !input light_target
+                      data: {}
+          default:
+            - alias: Turn on Lights to Desired Brightness
+              service: light.turn_on
+              target:
+                entity_id: !input light_target
+              data_template:
+                brightness_step: >
+                  {{ ([-1 * max_step_pct, (states(illuminance_target_entity)|int(0) - states(illuminance_entity)|int(0)), max_step_pct] | sort)[1] }}
+            - wait_for_trigger:
+                - platform: state
+                  entity_id:
+                    - !input light_target
+                  from: "on"
+                  to: "off"
+              timeout:
+                seconds: "{{ update_frequency }}"
+      until:
+        - condition: or
+          conditions:
+            - alias: If the light was switched off.
+              condition: template
+              value_template: "{{ wait.completed }}"
+            - alias: If lights are off
+              condition: state
+              entity_id: !input light_target
+              state: "off"
+            - alias: If it is at maximum
+              condition: numeric_state
+              entity_id: !input light_target
+              above: 250
+              attribute: brightness
+            - alias: If it is at minimum
+              condition: numeric_state
+              entity_id: !input light_target
+              attribute: brightness
+              below: 5
+            - alias: If it close enough to desired brightness
+              condition: template
+              value_template: |
+                {{ (states(illuminance_target_entity)|int(0) - states(illuminance_entity)|int(0))|abs < illuminance_threshold }}
+  - if:
+      - alias: >-
+          If it is too bright outside or if the room is somehow no
+          longer populated (this doesn't work), turn off the lights.
+        condition: or
+        conditions:
+          - condition: numeric_state
+            entity_id: !input light_target
+            attribute: brightness
+            below: 1
+          - condition: state
+            entity_id: !input trigger_target
+            state: "off"
+    then:
+      - alias: Turn off Lights
+        service: light.turn_off
+        target:
+          entity_id: !input light_target
+        data: {}
+mode: single
+
