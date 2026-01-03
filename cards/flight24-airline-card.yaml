@@ -13,10 +13,6 @@ content: >
   {# Given there's no clean way to get the distance, I'm making it a user config #}
   {% set distance_unit = 'km' %}
 
-  {# --- Asset paths --- #}
-  {% set fallback_icon = '/local/assets/fallback-airline/icon.png' %}
-  {% set private_icon  = '/local/assets/private-plane/private-plane.png' %}
-
   {# --- Get flight lists --- #}
   {% set local  = state_attr('sensor.flightradar24_current_in_area', 'flights') or [] %}
   {% set last_5 = state_attr('sensor.flightradar24_last_5_flights', 'flights') or [] %}
@@ -83,21 +79,8 @@ content: >
       {% set sublabel = 'Most tracked flight' %}
     {% endif %}
 
-    {# --- ICAO logo selection --- #}
-    {% set logo_url = fallback_icon %}
-    {% set icao = '' %}
-    {% if cs|length >= 3 %}
-      {% set icao = cs[:3] | upper %}
-    {% elif fn|length >= 3 %}
-      {% set icao = fn[:3] | upper %}
-    {% endif %}
-    {% if icao %}
-      {% set logo_url = '/local/assets/flightaware_logos/' ~ icao ~ '.png' %}
-    {% endif %}
-
     {# --- Label under logo (with private/unknown handling) --- #}
     {% if fn.startswith('N') or cs.startswith('N') %}
-      {% set logo_url = private_icon %}
       {% set airline_label = 'Private aircraft' %}
     {% else %}
       {% if 'unknown' in airline_l %}
@@ -144,7 +127,8 @@ content: >
             font-size:15px;
             opacity:0.8;
           ">
-            {{ cs }}
+            {{ airline_label }}
+            ({{ cs }})
           </div>
 
           <div style="
@@ -206,47 +190,6 @@ content: >
             </div>
 
           </div>
-        </div>
-
-        <div style="text-align:right;">
-          <div style="
-            width:90px;
-            height:90px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            overflow:hidden;
-          ">
-            <img src="{{ logo_url }}" style="
-              max-width:80%;
-              max-height:80%;
-              object-fit:contain;
-            " />
-          </div>
-
-          <div style="
-            font-size:12px;
-            opacity:0.7;
-            text-transform:uppercase;
-            margin-top:4px;
-            text-align:center;
-          ">
-            {{ airline_label }}
-          </div>
-
-          {% if mode == 'most' %}
-          <div style="
-            font-size:10px;
-            opacity:0.6;
-            text-transform:uppercase;
-            margin-top:3px;
-            text-align:center;
-            letter-spacing:0.15em;
-          ">
-            MOST TRACKED FLIGHT
-          </div>
-          {% endif %}
-
         </div>
 
       </div>
