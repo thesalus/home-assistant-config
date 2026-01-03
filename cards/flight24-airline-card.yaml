@@ -1,0 +1,255 @@
+type: custom:html-template-card
+title: ""
+ignore_line_breaks: true
+entities:
+  - sensor.flightradar24_current_in_area
+  - sensor.flightradar24_last_5_flights
+  - sensor.flightradar24_most_tracked
+content: >
+  {# Adapted from https://github.com/potseeslc/flight24-airline-card #}
+  {# --- User Configuration --- #}
+  {# Flight selection is limited to flights above this threshold (ft) #}
+  {% set altitude_min_ft = 2500 %}
+  {# Given there's no clean way to get the distance, I'm making it a user config #}
+  {% set distance_unit = 'km' %}
+
+  {# --- Asset paths --- #}
+  {% set fallback_icon = '/local/assets/fallback-airline/icon.png' %}
+  {% set private_icon  = '/local/assets/private-plane/private-plane.png' %}
+
+  {# --- Get flight lists --- #}
+  {% set local  = state_attr('sensor.flightradar24_current_in_area', 'flights') or [] %}
+  {% set last_5 = state_attr('sensor.flightradar24_last_5_flights', 'flights') or [] %}
+  {% set recent = local + last_5 %}
+  {% set most   = state_attr('sensor.flightradar24_most_tracked', 'flights') or [] %}
+
+  {# --- Pick closest local flight above threshold --- #}
+  {% set ns = namespace(best=None, best_dist=999999999) %}
+  {% for fl in recent %}
+    {% if fl is mapping
+          and 'latitude' in fl and 'longitude' in fl
+          and 'altitude' in fl and (fl['altitude'] or 0) > altitude_min_ft %}
+      {% set d = distance('zone.home', fl['latitude'], fl['longitude']) %}
+      {% if d is number and d < ns.best_dist %}
+        {% set ns.best = fl %}
+        {% set ns.best_dist = d %}
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+
+  {% if ns.best %}
+    {% set mode = 'local' %}
+    {% set f = ns.best %}
+    {% set dist = (ns.best_dist) | round(1) %}
+  {% else %}
+    {% set mode = 'most' %}
+    {% set f = most[0] if most|length > 0 else None %}
+  {% endif %}
+
+  <div style="
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  ">
+
+  {% if not f %}
+    <div style="font-size:16px;opacity:0.85;">
+      No flights available ✈️
+    </div>
+  {% else %}
+
+    {# --- Extract values safely --- #}
+    {% set fn       = (f.get('flight_number','')       | string) %}
+    {% set cs       = (f.get('callsign','')            | string) %}
+    {% set airline  = (f.get('airline_short','Unknown')| string) %}
+    {% set airline_l= airline | lower %}
+    {% set origin   = f.get('airport_origin_city','Unknown') %}
+    {% set dest     = f.get('airport_destination_city','Unknown') %}
+    {% set alt      = f.get('altitude', 0) or 0 %}
+    {% set gs       = f.get('ground_speed', 0) or 0 %}
+    {% set aircraft = f.get('aircraft_type')
+                       or f.get('aircraft_model')
+                       or f.get('aircraft_code')
+                       or 'Unknown' %}
+
+    {# --- Header text --- #}
+    {% if mode == 'local' %}
+      {% set header   = 'Closest flight • ' ~ dist ~ ' ' ~ distance_unit ~ ' from home' %}
+      {% set sublabel = 'Nearby flight' %}
+    {% else %}
+      {% set header   = 'Most tracked flight on Flightradar24' %}
+      {% set sublabel = 'Most tracked flight' %}
+    {% endif %}
+
+    {# --- ICAO logo selection --- #}
+    {% set logo_url = fallback_icon %}
+    {% set icao = '' %}
+    {% if cs|length >= 3 %}
+      {% set icao = cs[:3] | upper %}
+    {% elif fn|length >= 3 %}
+      {% set icao = fn[:3] | upper %}
+    {% endif %}
+    {% if icao %}
+      {% set logo_url = '/local/assets/flightaware_logos/' ~ icao ~ '.png' %}
+    {% endif %}
+
+    {# --- Label under logo (with private/unknown handling) --- #}
+    {% if fn.startswith('N') or cs.startswith('N') %}
+      {% set logo_url = private_icon %}
+      {% set airline_label = 'Private aircraft' %}
+    {% else %}
+      {% if 'unknown' in airline_l %}
+        {% set airline_label = icao if icao else sublabel %}
+      {% else %}
+        {% set airline_label = airline %}
+      {% endif %}
+    {% endif %}
+
+    <div style="
+      display:flex;
+      flex-direction:column;
+      width:100%;
+      padding:8px;
+      max-width:1000px;
+    ">
+
+      <div style="
+        width:100%;
+        display:grid;
+        grid-template-columns:1fr auto;
+        gap:16px;
+        align-items:center;
+      ">
+
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="
+            font-size:11px;
+            opacity:0.7;
+            letter-spacing:0.15em;
+            text-transform:uppercase;
+          ">
+            {{ header }}
+          </div>
+
+          <div style="
+            font-size:26px;
+            font-weight:600;
+          ">
+            {{ fn if fn|length > 0 else cs }}
+          </div>
+
+          <div style="
+            font-size:15px;
+            opacity:0.8;
+          ">
+            {{ cs }}
+          </div>
+
+          <div style="
+            font-size:17px;
+            opacity:0.9;
+            margin-top:2px;
+          ">
+            {{ origin }} → {{ dest }}
+          </div>
+
+          <div style="
+            margin-top:8px;
+            font-size:13px;
+            display:flex;
+            gap:24px;
+            flex-wrap:wrap;
+          ">
+
+            <div>
+              <div style="
+                font-size:10px;
+                opacity:0.6;
+                text-transform:uppercase;
+                letter-spacing:0.15em;
+              ">
+                Altitude
+              </div>
+              <div style="font-size:20px;font-weight:600;">
+                {{ alt|int }} ft
+              </div>
+            </div>
+
+            <div>
+              <div style="
+                font-size:10px;
+                opacity:0.6;
+                text-transform:uppercase;
+                letter-spacing:0.15em;
+              ">
+                Ground Speed
+              </div>
+              <div style="font-size:20px;font-weight:600;">
+                {{ gs|int }} kts
+              </div>
+            </div>
+
+            <div>
+              <div style="
+                font-size:10px;
+                opacity:0.6;
+                text-transform:uppercase;
+                letter-spacing:0.15em;
+              ">
+                Aircraft
+              </div>
+              <div style="font-size:20px;font-weight:600;">
+                {{ aircraft }}
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div style="text-align:right;">
+          <div style="
+            width:90px;
+            height:90px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            overflow:hidden;
+          ">
+            <img src="{{ logo_url }}" style="
+              max-width:80%;
+              max-height:80%;
+              object-fit:contain;
+            " />
+          </div>
+
+          <div style="
+            font-size:12px;
+            opacity:0.7;
+            text-transform:uppercase;
+            margin-top:4px;
+            text-align:center;
+          ">
+            {{ airline_label }}
+          </div>
+
+          {% if mode == 'most' %}
+          <div style="
+            font-size:10px;
+            opacity:0.6;
+            text-transform:uppercase;
+            margin-top:3px;
+            text-align:center;
+            letter-spacing:0.15em;
+          ">
+            MOST TRACKED FLIGHT
+          </div>
+          {% endif %}
+
+        </div>
+
+      </div>
+    </div>
+
+  {% endif %} </div>
