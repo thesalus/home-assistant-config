@@ -16,12 +16,11 @@ content: >
   {# --- Get flight lists --- #}
   {% set local  = state_attr('sensor.flightradar24_current_in_area', 'flights') or [] %}
   {% set last_5 = state_attr('sensor.flightradar24_last_5_flights', 'flights') or [] %}
-  {% set recent = local + last_5 %}
   {% set most   = state_attr('sensor.flightradar24_most_tracked', 'flights') or [] %}
 
   {# --- Pick closest local flight above threshold --- #}
   {% set ns = namespace(best=None, best_dist=999999999) %}
-  {% for fl in recent %}
+  {% for fl in local %}
     {% if fl is mapping
           and 'latitude' in fl and 'longitude' in fl
           and 'altitude' in fl and (fl['altitude'] or 0) > altitude_min_ft %}
@@ -32,6 +31,19 @@ content: >
       {% endif %}
     {% endif %}
   {% endfor %}
+  {% if not ns.best %}
+    {% for fl in last_5 %}
+      {% if fl is mapping
+            and 'latitude' in fl and 'longitude' in fl
+            and 'altitude' in fl and (fl['altitude'] or 0) > altitude_min_ft %}
+        {% set d = distance('zone.home', fl['latitude'], fl['longitude']) %}
+        {% if d is number and d < ns.best_dist %}
+          {% set ns.best = fl %}
+          {% set ns.best_dist = d %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
 
   {% if ns.best %}
     {% set mode = 'local' %}
@@ -69,6 +81,12 @@ content: >
                        or f.get('aircraft_model')
                        or f.get('aircraft_code')
                        or 'Unknown' %}
+    {% set eta_val = f.get('time_estimated_arrival', 0) | int %}
+    {% set eta = (eta_val | float | as_datetime) if eta_val > 0 else None %}
+    {% set departure_val = f.get('time_real_departure', 0) | int %}
+    {% set currTime = now() %}
+    {% set progress_pct = 100 * (as_timestamp(currTime) | int - departure_val) / (eta_val - departure_val) if (eta_val - departure_val) > 0 else 0 %}
+
 
     {# --- Header text --- #}
     {% if mode == 'local' %}
@@ -126,9 +144,23 @@ content: >
           <div style="
             font-size:15px;
             opacity:0.8;
+            display:flex;
+            flex-direction:row;
+            white-space:nowrap;
+            min-width:0;
+            gap:5px;
+            width:85%;
           ">
-            {{ airline_label }}
-            ({{ cs }})
+            <span style="flex-shrink: 0; max-width: 70%;">
+              {{ airline_label }} 
+            </span>
+          
+            <span style="
+              flex-shrink:1;
+              overflow-x:hidden;
+              text-overflow:ellipsis;
+            ">({{ cs }})
+            </span>
           </div>
 
           <div style="
@@ -189,6 +221,50 @@ content: >
               </div>
             </div>
 
+          </div>
+
+          {# Adapted from https://github.com/plckr/flightradar-flight-card/blob/main/src/flight-progress-bar.ts #}
+          <div style="
+            margin-top:8px;
+            font-size:13px;
+            display:flex;
+            gap:2px;
+            flex-wrap:wrap;
+          ">
+              <div style="
+                width:100%;
+                position: relative;
+                background: var(--state-active-color);
+                background: linear-gradient(
+                  90deg,
+                  var(--state-active-color) 0%,
+                  var(--state-active-color) calc({{ progress_pct }} * 1%),
+                  var(--secondary-background-color) calc({{ progress_pct }} * 1%),
+                  var(--secondary-background-color) 100%
+                );
+                height: 4px;
+                border-radius: 999px;
+              ">
+                <ha-icon style="
+                position: absolute;
+                top: 0px;
+                left: calc({{ progress_pct }} * 1%);
+                transform: translate(-50%, -50%);
+                --mdc-icon-size: var(--ha-space-4);
+                background: var(--card-background-color, #fff);
+                color: var(--accent-color)" icon="mdi:airplane" />
+              </div>
+
+              {% if eta and eta > currTime %}
+                <div style="
+                  width:100%;
+                  font-size:12px;
+                  opacity:0.6;
+                  text-align: right;
+                ">
+                {{ time_until(eta, 1) }} remaining
+              </div>
+              {% endif %}
           </div>
         </div>
 
