@@ -81,12 +81,10 @@ content: >
                        or f.get('aircraft_model')
                        or f.get('aircraft_code')
                        or 'Unknown' %}
-    {% set eta_val = f.get('time_estimated_arrival', 0) | int %}
-    {% set eta = (eta_val | float | as_datetime) if eta_val > 0 else None %}
-    {% set departure_val = f.get('time_real_departure', 0) | int %}
-    {% set currTime = now() %}
-    {% set progress_pct = 100 * (as_timestamp(currTime) | int - departure_val) / (eta_val - departure_val) if (eta_val - departure_val) > 0 else 0 %}
-
+    {% set eta_epoch = f.get('time_estimated_arrival', 0) | int %}
+    {% set departure_epoch = f.get('time_real_departure', 0) | int %}
+    {% set now_epoch = as_timestamp(now()) | int %}
+    {% set progress_pct = 100 * (now_epoch - departure_epoch) / (eta_epoch - departure_epoch) if (eta_epoch - departure_epoch) > 0 else 0 %}
 
     {# --- Header text --- #}
     {% if mode == 'local' %}
@@ -246,24 +244,31 @@ content: >
                 border-radius: 999px;
               ">
                 <ha-icon style="
-                position: absolute;
-                top: 0px;
-                left: calc({{ progress_pct }} * 1%);
-                transform: translate(-50%, -50%);
-                --mdc-icon-size: var(--ha-space-4);
-                background: var(--card-background-color, #fff);
-                color: var(--accent-color)" icon="mdi:airplane" />
+                  position: absolute;
+                  top: 0px;
+                  left: calc({{ progress_pct }} * 1%);
+                  transform: translate(-50%, -50%);
+                  --mdc-icon-size: var(--ha-space-4);
+                  background: var(--card-background-color, #fff);
+                  color: var(--accent-color)" icon="mdi:airplane" />
               </div>
 
-              {% if eta and eta > currTime %}
+              {% if eta_epoch and eta_epoch > now_epoch %}
+                {% set remaining = eta_epoch - now_epoch %}
                 <div style="
                   width:100%;
                   font-size:12px;
                   opacity:0.6;
                   text-align: right;
                 ">
-                {{ time_until(eta, 1) }} remaining
-              </div>
+                {% if remaining > 3600 %}
+                  {{ (remaining / 3600) | round(0) }}h{{ (remaining / 60) | round(0) % 60 }}m remaining
+                {% elif remaining > 60 %}
+                  {{ (remaining / 60) | round(0) }}m remaining
+                {% else %}
+                  {{ remaining }}s remaining
+                {% endif %}
+                </div>
               {% endif %}
           </div>
         </div>
